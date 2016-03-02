@@ -23,8 +23,9 @@
         - 初始化pmm时都做了什么, 初始化vmm都干了什么
         - 有哪些情况会切换页目录表(cr3), 也就是说切换了虚拟内存映射
         - pmm_manager, vmm_struct, vma_struct都是干嘛的
-        - 在分页机制建立起来之前, 我们使用的地址必须是物理地址, 然而我们的链接脚本都假定了内核被加载到0xC0100000, 为什么函数调用不会失败呢? 也就是说pmm_init之前的代码中0xC0100000的地址为什么不会出错
-
+        - 在分页机制建立起来之前, 我们使用的地址必须是物理地址, 然而我们的链接脚本都假定了内核被加载到0xC0100000, 为什么函数调用不会失败呢? 也就是说pmm_init之前的代码中0xC0100000的地址为什么不会出错?
+    - 从内核被加载到内存中到分页机制开启之前
+        - 内核被加载到0x00100000(PA), 此时使用的段描述符的起始地址还是0, 即la=pa. 接下来在kern/init/entry.S:kern_entry中, 重新加载了GDT, 而这个临时的GDT的中所有描述符的起始地址都是-0xC0000000, 所以la-0xC0000000=pa, 这正好抵消了kernel文件中+0xC0000000的偏移量.
     - 分页机制
         - 内核页表: kern/mm/pmm.c:pmm_init是pmm初始化函数, 总体来说, 工作可以概括为初始化物理内存分配器, 建立一个新的页目录(这个新的页目录是用pmm_manager申请的空间), 新的页目录
         这里先调用page_init, 检查可用的物理内存, 将可用的物理内存全部线性映射到0xC0000000(注意这里页目录还是bootloader里面的), 同时也告诉了pmm_manager哪些物理内存是可用的哪些物理内存是给内核保留的(这部分主要是kernel文件, 包含代码和kernel的静态全局变量)
@@ -38,6 +39,10 @@
         - 每个mm_struct包含一个页表, 可以有独立的内存映射, 并且所有的mm_struct中的页表都将这个页表映射到自己的VPT这个位置(va).
         - vma_struct对应一段连续的va, 和这段va的映射. 虚拟内存不会在创建时在页表中被映射, 而是当第一次访问该虚拟内存时会根据对应的vma_struct创建对应的页表.
         - vmm.c:mm_map负责创建一段虚拟内存, 会通过参数vma_store返回这段虚拟内存对应的vma
+    - 分配内存的几种方式
+        1. kern/mm/pmm.c:alloc_pages(npages): 分配物理内存并且映射到内核空间. 只能分配内核空间的内存(3G~3G+896M)
+        2.
+        3.
 
 4. 进程调度
     - 创建一个内核线程的过程
@@ -48,11 +53,39 @@
             4. tf参数可以指定中断返回时如何恢复执行上下文, 即可以指定进程入口地址.
             5. 把新建的proc_struct和当前进程建立父子进程关系.
             6. 分配一个唯一pid.
+    - 一个内核线程拥有的资源:
+        1. 和所有其他内核线程共享的页目录表
+        2. 使用pmm分配的内核栈
+        3. 唯一pid
     - 创建一个用户进程
         1. do_fork创建新的内核线程
         2. 在新的内核线程中系统调用do_execve->load_icode
         3. load_icode
             1. 接受参数binary, size, 这是要加载的elf文件在内存中的地址
             1. 创建mm_struct, 复制boot_pgdir从而创建一个新的页目录表
-            2. 解析elf文件, 将每个section加载到elf文件中指定的va
-            3.
+            2. 解析elf文件, 将每个section加载到elf文件中指定的va(这些va都是在新页表中的)
+            3. 建立一个4页的用户栈, 栈顶为0xC0000000
+            4. 新页表加载到cr3, 用户地址空间可用
+            5. 设置tf, 其中保存了中断返回时恢复的执行上下文, 都是用户态的.
+
+    - 启动内核线程过程中堆栈的使用情况
+        '''
+        位置			             堆栈		
+        do_fork系统调用会设置proc的返回地址是fork_ret, do_fork系统调用返回
+        switch_to_1		         idle's kernel stack, 这个栈会被保存在from中
+        switch_to_2		         to.esp	= proc.tf
+        forkret			           to.esp	= proc.tf
+        forkrets		           proc.tf = proc.kstack + KSTACKSIZE - sizeof(struct trapframe)
+        \_\_trapret		         proc.tf 		0 (中断返回)
+        kernel\_thread\_entry	 proc.tf + xx 这里开始tf不维护了, 给内核线程当做线程栈使用, 由于kstack是用alloc_page分配的,不是和proc_struct保存在一起的, 所以不维护这个栈不会导致其他数据被破坏
+        '''
+    - 启动用户线程过程中堆栈使用情况
+        位置                    堆栈
+        fork, sys_fork          caller's kernel stack(idle或者其他线程的内核栈)
+        proc_run                设置了进程的内核栈(proc.kstack+KSTACKSIZE), 放在tss中, 用于用户态进程转到内核中时使用
+        syscall(execv)          ..
+        do_execve
+        load_icode              tf中设置用户堆栈USTACKTOP(0xC0000000)
+        iret                    切换到上面设置的用户栈
+        \_start                 用户栈
+        syscall                 切换到tss中指定的内核栈()

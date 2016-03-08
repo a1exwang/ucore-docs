@@ -213,7 +213,7 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
     - .mmap_list, 连接了很多个vma_struct, 每个vma_struct代表一个连续va内存块, 根据起始地址排序
     - .map_count, vma_struct的数量
     - .pgdir, 页目录表, 上面那些vma_struct对应的va都是指在这个页表中的va
-    - .sm_priv, 给swap_manager使用的私有数据(这样可以保证swap_manager的可组装性)
+    - .sm_priv, 给swap_manager使用的私有数据(这样可以保证swap_manager的可组装性), 现在使用的是fifo_swap, 这个字段用于保存一个链表, 链表中元素是将要交换到外存中的物理页(struct Page).
     - 每个mm_struct包含一个页表, 可以有独立的内存映射(基本上一个mm_struct和一个进程相关联), 并且所有的mm_struct中的页表都将这个页表映射到自己的VPT这个位置(va).
     - vma_struct对应一段连续的va, 和这段va的映射. 虚拟内存不会在创建时在页表中被映射, 而是当第一次访问该虚拟内存时会根据对应的vma_struct创建对应的页表.
     - vmm.c:mm_map负责创建一段虚拟内存, 会通过参数vma_store返回这段虚拟内存对应的vma
@@ -222,7 +222,9 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
     - vm_start, vm_end, 标示一段vma
     - vm_flags, 读写执行
     - list_link, 对应mm_struct.mmap_list
-1. 
+1. Page新增的两个字段
+    - .pra_page_link
+    - .pra_vaddr
 
 ### pmm中新增函数和vmm中的函数分析
 1. pmm的实现解决了物理内存映射, 物理内存分配, 内核内存分配的问题, 但是没有解决如何分配除了KERNAL_BASE以上的内存的问题, 即用户空间的虚拟内存分配问题. vmm实现了用户进程地址空间的映射(每个mm_struct维护一个页表), 同时添加了虚拟内存交换到外存的功能.
@@ -242,9 +244,70 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
   - 然后通过vma检查权限
   - 如果情况是是分配了va但是没创建页表项(没给分配物理地址), 则创建页表项且把权限写到页表项中.(注意这里可执行权限其实是没法检查的, 需要nXe的支持. 因此ucore把所有可读的内存都当成是可执行的)
   - 如果是该页交换到了磁盘上, 则从磁盘交换回来, 得到了一个新的物理页(可能和之前的物理页不一样, 所以需要page_insert一下重新建立物理地址到va的映射).
-  - 这里的swap_in实现很简单, 它假定了可用物理页足够, 直接分配物理页. 但是实际情况可能是物理页不够, 需要把一些物理页交换到磁盘上从而腾出一些物理页.
-### 实验的实现
-
+7. swap manager
+  - pmm.c::alloc_pages()中如果调用pm->alloc_pages失败, 即物理内存不足, 则调用swap_out将pra_list队列首的物理页交换到外存中.
+  - 换出物理页之后, 在该物理页对应的va的pte上记录换出的地址(由于是256字节对齐, P为必为0, 访问该页产生页面错误)
+  - swap_out, swap_in, 访问磁盘换出换入页
+  - swap_manager需要实现的函数
+    - map_swappable, 一个物理页可以被交换时被调用
+    - swap_out_victim, 一个物理页被交换是被调用
+### 实验内容
+  - 问题1
+  - 如果要在ucore上实现"extended clock页替换算法"请给你的设计方案，现有的swap_manager框架是否足以支持在ucore中实现此算法？如果是，请给你的设计方案。如果不是，请给出你的新的扩展和基此扩展的设计方案。并需要回答如下问题
+     - 需要被换出的页的特征是什么？
+       - 是由pgdir_alloc_page()分配的物理页
+     - 在ucore中如何判断具有这样特征的页？
+       - 调用了pgdir_alloc_page()就会直接调用map_swappable()加入到可交换的链表中
+     - 何时进行换入和换出操作？
+       - alloc_pages分不到内存的时候交换
+     - 具体如何实现?
+       - 在swap_out_victim()中, 遍历所有可交换的页(struct Page), 对于每个页, 通过Page找到页表项, 即
+        ```
+        pte = pa2kva(mm->pgdir\[PDX(page->pra_vaddr)\]\&0x3FF)\[PTX(page->pra_vaddr)\]
+        dirty = PTE \& DIRTY
+        accessed = PTE \& ACCESSED
+        ```
+        从dirty=0,accessed=0的, 然后是dirty=1,accessed=1, 然后等等..如果找到则返回该page. 当下次被换入时, 调用map_swappable加入可交换链表
 ### 遇到的问题
 1. 哪些内存是可以交换到外存的, 哪些不可以?
+  - 只需看哪里调用了map_swappable, 一共两处
+    1. pgdir_alloc_page(), 也就是说pgdir_alloc_page分配的虚拟页对应的物理页可能被交换出去, 其余的kmalloc, alloc_pages都不会交换.
+    2. do_page_fault(), 这里只是设置刚从外存交换到内存中的物理页为可交换, 本质上还是上一个函数添加的物理页.
 2. vma_struct中的flags是如何限制内存块读写执行权限的?
+    1. 在do_pgfault中, vma_struct的权限会被赋给页表项, 从而限制该页的权限, 但是页表项没有可执行这个标志, 所以ucore中可执行权限无法限制.
+
+
+## 实验四：内核线程管理
+
+### 内核线程在ucore中的实现方式
+1. 概述
+  - ucore中的内核线程是非抢占的, 必须线程主动返回才会切换到下一个线程
+  - 每个内核线程包含独立的执行上下文(context), trapframe和堆栈 但是内存是共享的, 所有内核线程的页表都是使用的boot_pgdir, 段描述符都使用gdt中的内核代码段和内核数据段.
+1. 数据结构分析: proc_struct结构体指针的组织
+  - 系统中所有的进程的proc_struct以多种方式连接
+    - 哈希表, pid => proc_struct, 这种方式可以快速通过pid来查找进程
+    - 双向链表, 可以以创建的顺序便利
+    - 每个proc_struct有一个parent指针指向创建者, 这导致所有的进程组织成以init进程为根的树形
+  - proc_struct 结构体的字段分析
+    -
+
+1. 内核线程的启动和切换过程
+    1. do_fork中创建了描述proc的数据结构, 并且把该线程(进程)添加到进程链表中, 并且设置该进程可调度. kernel_thread函数中把进程的入口地址(kernel_thread_entry)存入进程context的eip中, 这样当进程恢复执行的时候就会从这个地址开始运行;
+    2. kernel_thread_entry: 该符号在kern/process/entry.S中, 它用ebx传入真正的进程入口地址, 调用该入口函数, 当入口函数返回后, 调用proc_exit结束进程;
+    3. cpu_idle中, schedule函数找到下一个可调度的进程, 调用proc_run;
+    4. proc_run中, 修改cr0切换页表, 切换堆栈, 这些信息都存在proc_struct结构体中, 最后调用switch_to这个汇编函数
+    5. switch_to 这个函数负责保存前一个进程的上下文, 并且设置下一个进程的上下文, 最后压入保存的eip, ret指令(模拟)函数返回, 跳转到了进程入口地址.
+    6. 当进程返回, 根据2所述, 会调用proc_exit. 当前这个函数只会停止内核. 这个函数真正的实现应该是设置进程为ZOMBIE状态并且sched使其他进程得到控制权.
+### 内核线程相关的函数分析
+  
+### 思考题
+1. 第1题: get_pid的实现. last_pid和next_safe两个static变量之间是一个未被使用的pid区间, 每次需要新生成一个pid时, last_pid++, 如果没有将区间长度变为0, 那么就成功获得了一个pid. 否则遍历pid列表, 从last_pid和MAX_PID之间找一个没有呗使用的pid, 并且维护last_pid和next_safe之间都是未被使用的pid. 这样可以是pid唯一. 但是当pid全部使用光了的时候, get_pid会死循环.
+
+1. 第2题: context在switch.S文件的switch_to中被使用, 用来保存和恢复线程的执行上下文, trapframe是用来在线程返回内核(中断,系统调用..)的时候恢复内核执行上下文用的, 如果是用户级线程, 还会发生特权级切换, 会用到trapframe中保存的内核堆栈.
+
+1. 第3题:
+    - 如果认为创建了proc_struct就叫"创建", 那么是创建了两个内核进程. 尝试创建多个线程, 只有最后一个创建的线程会被启动, 但是如果在线程函数中调用schedule, 会导致其他线程被启动, 所以现在线程之间不能抢占运行, 只能手动放弃CPU从而让其他线程执行.
+
+    - 保存并且关闭中断的作用:
+        1. 防止这段修改current代码重入, 如果之后改成了以时钟中断来出发进程切换的话, 这就相当于加了锁, 禁止其他进程运行
+        2. 保存中断状态防止新进程中修改中断使能状态

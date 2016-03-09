@@ -251,23 +251,45 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
   - swap_manager需要实现的函数
     - map_swappable, 一个物理页可以被交换时被调用
     - swap_out_victim, 一个物理页被交换是被调用
+### 初始化流程分析
+  - 主要问题
+    - 分页机制什么时候启动, 物理内存页如何分配, 内核使用了哪些数据结构, 如何知道哪些物理页分配了.
+    - 初始化pmm时都做了什么, 初始化vmm都干了什么
+    - 有哪些情况会切换页目录表(cr3), 也就是说切换了虚拟内存映射
+    - pmm_manager, vmm_struct, vma_struct都是干嘛的
+    - 在分页机制建立起来之前, 我们使用的地址必须是物理地址, 然而我们的链接脚本都假定了内核被加载到0xC0100000, 为什么函数调用不会失败呢? 也就是说pmm_init之前的代码中0xC0100000的地址为什么不会出错?
+  - 从内核被加载到内存中到分页机制开启之前
+    - 内核被加载到0x00100000(PA), 此时使用的段描述符的起始地址还是0, 即la=pa. 接下来在kern/init/entry.S:kern_entry中, 重新加载了GDT, 而这个临时的GDT的中所有描述符的起始地址都是-0xC0000000, 所以la-0xC0000000=pa, 这正好抵消了kernel文件中+0xC0000000的偏移量.
+  - 分页机制
+    - 内核页表: kern/mm/pmm.c:pmm_init是pmm初始化函数, 总体来说, 工作可以概括为初始化物理内存分配器, 建立一个新的页目录(这个新的页目录是用pmm_manager申请的空间), 新的页目录
+    这里先调用page_init, 检查可用的物理内存, 将可用的物理内存全部线性映射到0xC0000000(注意这里页目录还是bootloader里面的), 同时也告诉了pmm_manager哪些物理内存是可用的哪些物理内存是给内核保留的(这部分主要是kernel文件, 包含代码和kernel的静态全局变量)
+  - 分段机制
+    - kern/mm/pmm.c:gdt_init中, 加载了GDT,TR. gdt只用了5项, 内核代码/数据段, 用户代码/数据段, TSS段, 而且TSS只设置了内核堆栈字段, 这在特权级切换时会用到, 其他字段都没用.
+  - 物理内存pmm_manager.
+    - 宏观上pmm_manager主要功能是接受内核提供的可用连续物理内存区间, 维护一个可用物理内存页的列表, 并且可以分配和回收这些物理内存页. 在`init_pmm_manager(); page_init();`之后我们就可以用alloc_page分配物理内存页.
+  - 内核中物理内存的堆式管理, kmalloc: 分配内核堆内存, 依赖于pmm的alloc_pages分配物理页
+  - 虚拟内存mm_struct
+    - 每个mm_struct包含一个页表, 可以有独立的内存映射, 并且所有的mm_struct中的页表都将这个页表映射到自己的VPT这个位置(va).
+    - vma_struct对应一段连续的va, 和这段va的映射. 虚拟内存不会在创建时在页表中被映射, 而是当第一次访问该虚拟内存时会根据对应的vma_struct创建对应的页表.
+    - vmm.c:mm_map负责创建一段虚拟内存, 会通过参数vma_store返回这段虚拟内存对应的vma
+
 ### 实验内容
   - 问题1
   - 如果要在ucore上实现"extended clock页替换算法"请给你的设计方案，现有的swap_manager框架是否足以支持在ucore中实现此算法？如果是，请给你的设计方案。如果不是，请给出你的新的扩展和基此扩展的设计方案。并需要回答如下问题
-     - 需要被换出的页的特征是什么？
-       - 是由pgdir_alloc_page()分配的物理页
-     - 在ucore中如何判断具有这样特征的页？
-       - 调用了pgdir_alloc_page()就会直接调用map_swappable()加入到可交换的链表中
-     - 何时进行换入和换出操作？
-       - alloc_pages分不到内存的时候交换
-     - 具体如何实现?
-       - 在swap_out_victim()中, 遍历所有可交换的页(struct Page), 对于每个页, 通过Page找到页表项, 即
-        ```
-        pte = pa2kva(mm->pgdir\[PDX(page->pra_vaddr)\]\&0x3FF)\[PTX(page->pra_vaddr)\]
-        dirty = PTE \& DIRTY
-        accessed = PTE \& ACCESSED
-        ```
-        从dirty=0,accessed=0的, 然后是dirty=1,accessed=1, 然后等等..如果找到则返回该page. 当下次被换入时, 调用map_swappable加入可交换链表
+    - 需要被换出的页的特征是什么？
+     - 是由pgdir_alloc_page()分配的物理页
+    - 在ucore中如何判断具有这样特征的页？
+     - 调用了pgdir_alloc_page()就会直接调用map_swappable()加入到可交换的链表中
+    - 何时进行换入和换出操作？
+     - alloc_pages分不到内存的时候交换
+    - 具体如何实现?
+     - 在swap_out_victim()中, 遍历所有可交换的页(struct Page), 对于每个页, 通过Page找到页表项, 即
+      ```
+      pte = pa2kva(mm->pgdir\[PDX(page->pra_vaddr)\]\&0x3FF)\[PTX(page->pra_vaddr)\]
+      dirty = PTE \& DIRTY
+      accessed = PTE \& ACCESSED
+      ```
+      从dirty=0,accessed=0的, 然后是dirty=1,accessed=1, 然后等等..如果找到则返回该page. 当下次被换入时, 调用map_swappable加入可交换链表
 ### 遇到的问题
 1. 哪些内存是可以交换到外存的, 哪些不可以?
   - 只需看哪里调用了map_swappable, 一共两处
@@ -275,7 +297,6 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
     2. do_page_fault(), 这里只是设置刚从外存交换到内存中的物理页为可交换, 本质上还是上一个函数添加的物理页.
 2. vma_struct中的flags是如何限制内存块读写执行权限的?
     1. 在do_pgfault中, vma_struct的权限会被赋给页表项, 从而限制该页的权限, 但是页表项没有可执行这个标志, 所以ucore中可执行权限无法限制.
-
 
 ## 实验四：内核线程管理
 
@@ -289,7 +310,14 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
     - 双向链表, 可以以创建的顺序便利
     - 每个proc_struct有一个parent指针指向创建者, 这导致所有的进程组织成以init进程为根的树形
   - proc_struct 结构体的字段分析
-    -
+    - state, need_resched, 当前进程状态和是否需要调度(即被其他进程抢占)
+    - pid, hash_link, list_link, pid是每个当前存在的进程唯一的(进程被销毁后,pid会被重新利用), hash_link是pid=>proc_struct的哈希表元素的链表, list_link是根据创建顺序维护的链表
+    - runs, name, parent, 顾名思义
+    - kstack, 进程在进入内核时(中断异常系统调用)使用的堆栈, 大小是2个物理页8KB, 在进入用户态之前被保存到tss中.
+    - mm, cr3, 进程使用的虚拟内存(内核线程不使用)
+    - flags, 暂时不使用
+    - context, 保存进程在内核态的通用寄存器
+    - tf, 保存进程进入内核时(中断异常系统调用时CPU自动保存到内核栈中, 而且tf就是指向内核栈栈底)的执行上下文
 
 1. 内核线程的启动和切换过程
     1. do_fork中创建了描述proc的数据结构, 并且把该线程(进程)添加到进程链表中, 并且设置该进程可调度. kernel_thread函数中把进程的入口地址(kernel_thread_entry)存入进程context的eip中, 这样当进程恢复执行的时候就会从这个地址开始运行;
@@ -299,15 +327,31 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
     5. switch_to 这个函数负责保存前一个进程的上下文, 并且设置下一个进程的上下文, 最后压入保存的eip, ret指令(模拟)函数返回, 跳转到了进程入口地址.
     6. 当进程返回, 根据2所述, 会调用proc_exit. 当前这个函数只会停止内核. 这个函数真正的实现应该是设置进程为ZOMBIE状态并且sched使其他进程得到控制权.
 ### 内核线程相关的函数分析
-  
+1. trapentry.S::forkrets
+2. sched.c::schedule()
+  - 关中断, 当前进程放弃执行, 调度下一个进程执行, 如果没有进程要执行, 则执行idle_proc
+  - 下一个进程的选取: 在proc_list中找下一个RUNNABLE的进程, 最终调用proc_run函数切换进程.
+3. proc.c
+  1. proc_run()
+    - 切换进程函数. 仅在内核态执行. 一个进程的内核态切换到另一个进程的内核态.
+    - 进程刚被创建时, context.eip指向forkret, context.esp指向tf(这句话是冗余的, 因为forkret中直接设置esp=tf), 所有进程的内核态入口点都是内核态的forkret.
+    - 进程暂停执行, 再继续执行时, context.eip
+    - forkret调用forkrets, forkrets设置esp后跳转到__trapret. 此时esp=tf, 即内核堆栈已经模拟了一个中断发生时的状态, 所以只需按tf中顺序弹出寄存器并且iretd就可以跳转到真正的进程入口啦.
+    - 内核线程的入口是kernel_thread_entry, 用edx传递参数, ebx传递真正的线程函数入口.
+  3. kernel_thread(fn, args, clone_flag)
+    - 设置内核线程的入口kernel_thread_entry和线程函数的入口ebx, 参数edx
+  4. copy_thread(proc, esp, tf)
+    - 设置堆栈的内核态上下文context, 和用户态上下文tf, 此处的esp是用户态堆栈地址, 对于内核线程来说, esp=NULL.
+  5. do_fork(clone_flags, stack, tf)
+    - 创建一个proc_struct, parent=current, 并且设置进程的执行上下文. 但是不真正执行进程, 仅仅添加到进程列表中.
+
 ### 思考题
 1. 第1题: get_pid的实现. last_pid和next_safe两个static变量之间是一个未被使用的pid区间, 每次需要新生成一个pid时, last_pid++, 如果没有将区间长度变为0, 那么就成功获得了一个pid. 否则遍历pid列表, 从last_pid和MAX_PID之间找一个没有呗使用的pid, 并且维护last_pid和next_safe之间都是未被使用的pid. 这样可以是pid唯一. 但是当pid全部使用光了的时候, get_pid会死循环.
 
 1. 第2题: context在switch.S文件的switch_to中被使用, 用来保存和恢复线程的执行上下文, trapframe是用来在线程返回内核(中断,系统调用..)的时候恢复内核执行上下文用的, 如果是用户级线程, 还会发生特权级切换, 会用到trapframe中保存的内核堆栈.
 
 1. 第3题:
-    - 如果认为创建了proc_struct就叫"创建", 那么是创建了两个内核进程. 尝试创建多个线程, 只有最后一个创建的线程会被启动, 但是如果在线程函数中调用schedule, 会导致其他线程被启动, 所以现在线程之间不能抢占运行, 只能手动放弃CPU从而让其他线程执行.
-
+    - 创建了两个proc_struct, 即创建了两个内核进程, init和idle. 而idle的工作只是不停地放弃执行并且唤醒init.
     - 保存并且关闭中断的作用:
         1. 防止这段修改current代码重入, 如果之后改成了以时钟中断来出发进程切换的话, 这就相当于加了锁, 禁止其他进程运行
         2. 保存中断状态防止新进程中修改中断使能状态

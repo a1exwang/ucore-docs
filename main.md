@@ -107,13 +107,13 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
     - va-3G = la = pa(仅使用分段, 不使用分页)
 
 ### 物理内存管理使用到的数据结构
-1. pde_t *boot_pgdir = NULL;
+1. pde_t \*boot_pgdir = NULL;
     - ucore之后一直使用的页目录表, 映射了3G(la)~3G+896M(la) => 0(ph)~896M(pa), 这样便于直接操控la即可直接操控物理内存(所以以后可以不区分物理地址和内核线性地址).
 2. free_area_t free_area;
     - 维护一个连续空闲物理内存块的链表
     - .free_list, 空闲链表表头(表头不使用)
     - .nr_free, 当前空闲页数量
-3. struct Page *pages;
+3. struct Page \*pages;
     - 描述每个物理页的对象数组. 指向静态段(end是kernel文件结束的地址), 用来维护物理页的属性(主要是弥补页表的不足, 比如页表项只能标示可读可写等少数几个物理页的属性), 并且pages数组项的地址可以直接推算出该Page对象描述的物理页的物理地址(page2pa)和内核线性地址(page2kva).
         ```
         pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
@@ -124,11 +124,11 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
         - bit 1: 代表该页是连续空闲页中的第一页
     - Page.property: 如果是连续空闲页的第一页, 代表连续空闲页的数量
     - Page.page_link: 如果是连续空闲页的第一页, 该字段是连接了所有空闲块的链表.
-4. struct pmm_manager *pmm_manager;
+4. ```struct pmm_manager *pmm_manager```;
     - 物理内存管理器, 是保存了一些函数指针的结构体, 利用多态.
-5. pte_t * const vpt = (pte_t *)VPT;
+5. ```pte_t * const vpt = (pte_t *)VPT```;
     - 页目录表的线性地址(页目录表一共4M, 正好占1024个页, 即占用一个页目录表项)
-6. pde_t * const vpd = (pde_t *)PGADDR(PDX(VPT), PDX(VPT), 0);
+6. ```pde_t * const vpd = (pde_t *)PGADDR(PDX(VPT), PDX(VPT), 0);```
     - vpt所在的页对应的页目录表项的线性地址
 7. struct segdesc gdt\[\];
     - ucore之后一直使用的全局描述符表, 其中的段描述符对虚拟地址进行线性映射
@@ -320,12 +320,12 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
     - tf, 保存进程进入内核时(中断异常系统调用时CPU自动保存到内核栈中, 而且tf就是指向内核栈栈底)的执行上下文
 
 1. 内核线程的启动和切换过程
-    1. do_fork中创建了描述proc的数据结构, 并且把该线程(进程)添加到进程链表中, 并且设置该进程可调度. kernel_thread函数中把进程的入口地址(kernel_thread_entry)存入进程context的eip中, 这样当进程恢复执行的时候就会从这个地址开始运行;
-    2. kernel_thread_entry: 该符号在kern/process/entry.S中, 它用ebx传入真正的进程入口地址, 调用该入口函数, 当入口函数返回后, 调用proc_exit结束进程;
-    3. cpu_idle中, schedule函数找到下一个可调度的进程, 调用proc_run;
-    4. proc_run中, 修改cr0切换页表, 切换堆栈, 这些信息都存在proc_struct结构体中, 最后调用switch_to这个汇编函数
-    5. switch_to 这个函数负责保存前一个进程的上下文, 并且设置下一个进程的上下文, 最后压入保存的eip, ret指令(模拟)函数返回, 跳转到了进程入口地址.
-    6. 当进程返回, 根据2所述, 会调用proc_exit. 当前这个函数只会停止内核. 这个函数真正的实现应该是设置进程为ZOMBIE状态并且sched使其他进程得到控制权.
+  1. do_fork中创建了描述proc的数据结构, 并且把该线程(进程)添加到进程链表中, 并且设置该进程可调度. kernel_thread函数中把进程的入口地址(kernel_thread_entry)存入进程context的eip中, 这样当进程恢复执行的时候就会从这个地址开始运行;
+  2. kernel_thread_entry: 该符号在kern/process/entry.S中, 它用ebx传入真正的进程入口地址, 调用该入口函数, 当入口函数返回后, 调用proc_exit结束进程;
+  3. cpu_idle中, schedule函数找到下一个可调度的进程, 调用proc_run;
+  4. proc_run中, 修改cr0切换页表, 切换堆栈, 这些信息都存在proc_struct结构体中, 最后调用switch_to这个汇编函数
+  5. switch_to 这个函数负责保存前一个进程的上下文, 并且设置下一个进程的上下文, 最后压入保存的eip, ret指令(模拟)函数返回, 跳转到了进程入口地址.
+  6. 当进程返回, 根据2所述, 会调用proc_exit. 当前这个函数只会停止内核. 这个函数真正的实现应该是设置进程为ZOMBIE状态并且sched使其他进程得到控制权.
 ### 内核线程相关的函数分析
 1. trapentry.S::forkrets
 2. sched.c::schedule()
@@ -351,10 +351,10 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
 1. 第2题: context在switch.S文件的switch_to中被使用, 用来保存和恢复线程的执行上下文, trapframe是用来在线程返回内核(中断,系统调用..)的时候恢复内核执行上下文用的, 如果是用户级线程, 还会发生特权级切换, 会用到trapframe中保存的内核堆栈.
 
 1. 第3题:
-    - 创建了两个proc_struct, 即创建了两个内核进程, init和idle. 而idle的工作只是不停地放弃执行并且唤醒init.
-    - 保存并且关闭中断的作用:
-        1. 防止这段修改current代码重入, 如果之后改成了以时钟中断来出发进程切换的话, 这就相当于加了锁, 禁止其他进程运行
-        2. 保存中断状态防止新进程中修改中断使能状态
+  - 创建了两个proc_struct, 即创建了两个内核进程, init和idle. 而idle的工作只是不停地放弃执行并且唤醒init.
+  - 保存并且关闭中断的作用:
+      1. 防止这段修改current代码重入, 如果之后改成了以时钟中断来出发进程切换的话, 这就相当于加了锁, 禁止其他进程运行
+      2. 保存中断状态防止新进程中修改中断使能状态
 
 
 ## 实验五: 用户进程
@@ -363,65 +363,124 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
 并且在ucore中加一些注释.
 ### 数据结构
 
-### 函数
+### 新增函数
+1. pmm.c::unmap_range(pgdir, start, end)
+  - 解除虚拟地址start~end(按页对齐)的映射
+1. pmm.c::exit_range(pgdir, start, end)
+  - 删除虚拟地址start~end(按页对齐)的页表
+1. pmm.c::copy_range(to, from, start, end, share)
+  - from, to都是页目录表, 把from中虚拟地址start~end的区间复制(或共享)到to的start~end
+  - 实现方式是找到他们对应的内核虚拟地址kva(也就意味着物理地址), 执行memcpy(复制的方式), 或者仅仅复制页表项(共享的方式)
+1. proc.c::copy_mm(clone_flags. proc)
+  - 对页目录表, 调用setup_pgdir共享内核地址, 调用copy_mm复制用户地址空间
+1. proc.c::setup_pgdir(mm)
+  - 给mm中的pgdir分配内存, 而这个初始的pgdir由boot_pgdir拷贝而来, 只是修改了虚拟地址为VPT的位置的内存页指向该页表,
+   这样所有进程的KERNAL_BASE以上的地址空间都是相同的(除了页表的位置, 所有进程的虚拟地址为VPT的地方都存着页表), 注意特权级切换的时候不切换页表.
+1. proc.c::load_icode(binary, size), proc.c::do_execve(name, len, binary, size)
+  - 见下面"用户进程的创建"
+1. proc.c::do_yield()
+  - 系统调用yield的实现, 当期进程放弃执行, 请求切换到其他进程.
+1. proc.c::do_wait(pid, code_store)
+  - 系统调用, 功能是等待pid进程退出, 并且获得该进程退出码, 最后协助释放该进程的proc_struct, 内核栈等数据结构.
+  - 用户进程传入的参数是不安全的, 先检查code_store是否是一个合法的用户地址空间的地址(否则用户可能可以利用do_wait在内核中, 向code_store传入内核地址从而实现向任意内核地址写入数据而破坏内核).
+1. proc.c::user_main(arg)
+  - 直接系统调用exec,传递要加载的用户进程文件地址, 当前阶段由于不支持文件系统, 用户进程可执行文件直接被编译到内核中, 所以这个地址是链接器给的地址.
+1. sched.c::wakeup_proc(proc)
+  - 禁用中断, 并且设置proc为RUNNABLE
+1. syscall.c
+  - 见下面"系统调用的实现"
+1. trap.c::trap(tf)
+  - 见下面"进程调度"
 
-### 过程分析
+### 遇到的问题和分析
 1. 中断如何实现
-    1. IDT在kern/trap/vectors.S:\_\_vectors符号
-    1. IDT中每一个ISR都在kern/trap/vectors.S:vector0-255
-    1. 每一个ISR仅仅将中断号压栈(如果该中断没有错误码, 那么0入栈, 平衡堆栈), 然后跳转到kern/trap/trapentry.S:\_\_alltraps
-    1. 发生软中断时CPU负责把ss,esp,cs,eip保存在内核堆栈, 并且根据tss切换堆栈, 根据描述符设置cs,eip
-    1. \_\_alltraps负责保存剩余寄存器, e\*x,e\*i,original esp, ebp, ds,es,fs,gd, 加载内核代码段描述符到ds,es
-    1. \_\_alltraps最终调用kernel/trap/trap.c:trap(tf)函数, tf就是用户态的执行上下文
-    1. trap是发生中断后被调用的第一个C函数. 在这里备份了当前进程的tf, 主要是为了能够处理中断重入. 如果是内核中发生的中断, 直接调用trap_dispatch, 否则需要启动调度器, 调度下一个进程 (从这里可以看出在lab5中还不是进程之间不能抢占CPU, 必须进程主动进行系统调用才会调度其他进程)
-    1. kern/trap/trap.c:trap_dispatch(struct trapframe \*tf). 这里switch语句根据不同的中断号来分发中断.
+  1. IDT在kern/trap/vectors.S:\_\_vectors符号
+  1. IDT中每一个ISR都在kern/trap/vectors.S:vector0-255
+  1. 每一个ISR仅仅将中断号压栈(如果该中断没有错误码, 那么0入栈, 平衡堆栈), 然后跳转到kern/trap/trapentry.S:\_\_alltraps
+  1. 发生软中断时CPU负责把ss,esp,cs,eip保存在内核堆栈, 并且根据tss切换堆栈, 根据描述符设置cs,eip
+  1. \_\_alltraps负责保存剩余寄存器, e\*x,e\*i,original esp, ebp, ds,es,fs,gd, 加载内核代码段描述符到ds,es
+  1. \_\_alltraps最终调用kernel/trap/trap.c:trap(tf)函数, tf就是用户态的执行上下文
+  1. trap是发生中断后被调用的第一个C函数. 在这里备份了当前进程的tf, 主要是为了能够处理中断重入. 如果是内核中发生的中断, 直接调用trap_dispatch, 否则需要启动调度器, 调度下一个进程 (从这里可以看出在lab5中还不是进程之间不能抢占CPU, 必须进程主动进行系统调用才会调度其他进程)
+  1. kern/trap/trap.c:trap_dispatch(struct trapframe \*tf). 这里switch语句根据不同的中断号来分发中断.
 
-1. 系统调用的实现
-    - kern/trap/trap.c:trap_dispatch中会当中断号等于T_SYSCALL时调用kern/syscall/syscall.c:syscall, 该函数从current全局变量中获取tf, 这个tf中的各个寄存器中保存了用户系统调用的5个参数, 用eax做返回值
-    - 从syscalls这个数组根据系统调用号找到系统调用函数sys_xxx, sys_xxx只负责将 uint32_t数组形式的参数转换成正常的c函数的参数(也就是调用真正的系统调用do_xxx)
+1. 系统调用如何实现
+  - kern/trap/trap.c:trap_dispatch中会当中断号等于T_SYSCALL时调用kern/syscall/syscall.c:syscall, 该函数从current全局变量中获取tf, 这个tf中的各个寄存器中保存了用户系统调用的5个参数, 用eax做返回值
+  - 从syscalls这个数组根据系统调用号找到系统调用函数sys_xxx, sys_xxx只负责将 uint32_t数组形式的参数转换成正常的c函数的参数(也就是调用真正的系统调用do_xxx)
 
-1. 进程调度
-    - 创建一个内核线程的过程
-        1. do_fork.
-            1. 初始化proc_struct
-            2. 用alloc_page分配内核栈, 也就是说所有进程都有一个内核栈, 即使是用户进程也会在中断时用到这个内核栈.
-            3. 拷贝current的mm(也就复制了当前进程的内存映射), 内核线程以共享mm的方式, 用户进程则复制mm.
-            4. tf参数可以指定中断返回时如何恢复执行上下文, 即可以指定进程入口地址.
-            5. 把新建的proc_struct和当前进程建立父子进程关系.
-            6. 分配一个唯一pid.
-    - 一个内核线程拥有的资源:
-        1. 和所有其他内核线程共享的页目录表
-        2. 使用pmm分配的内核栈
-        3. 唯一pid
-    - 创建一个用户进程
-        1. do_fork创建新的内核线程
-        2. 在新的内核线程中系统调用do_execve->load_icode
-        3. load_icode
-            1. 接受参数binary, size, 这是要加载的elf文件在内存中的地址
-            1. 创建mm_struct, 复制boot_pgdir从而创建一个新的页目录表
-            2. 解析elf文件, 将每个section加载到elf文件中指定的va(这些va都是在新页表中的)
-            3. 建立一个4页的用户栈, 栈顶为0xC0000000
-            4. 新页表加载到cr3, 用户地址空间可用
-            5. 设置tf, 其中保存了中断返回时恢复的执行上下文, 都是用户态的.
+1. 进程调度如何实现
+  - 创建一个内核线程的过程
+      1. do_fork.
+          1. 初始化proc_struct
+          2. 用alloc_page分配内核栈, 也就是说所有进程都有一个内核栈, 即使是用户进程也会在中断时用到这个内核栈.
+          3. 拷贝current的mm(也就复制了当前进程的内存映射), 内核线程以共享mm的方式, 用户进程则复制mm.
+          4. tf参数可以指定中断返回时如何恢复执行上下文, 即可以指定进程入口地址.
+          5. 把新建的proc_struct和当前进程建立父子进程关系.
+          6. 分配一个唯一pid.
+  - 一个内核线程拥有的资源:
+      1. 和所有其他内核线程共享的页目录表
+      2. 使用pmm分配的内核栈
+      3. 唯一pid
+  - 创建一个用户进程
+      1. kernel_thread()创建新的内核线程(设置入口点为user_main)
+      2. 在新的内核线程中user_main系统调用do_execve->load_icode
+      3. load_icode
+          1. 接受参数binary, size, 这是要加载的elf文件在内存中的地址
+          1. 创建mm_struct, 复制boot_pgdir从而创建一个新的页目录表
+          2. 解析elf文件, 将每个section加载到elf文件中指定的va(这些va都是在新页表中的)
+          3. 建立一个4页的用户栈, 栈顶为0xC0000000
+          4. 新页表加载到cr3, 用户地址空间可用
+          5. 设置tf, 其中保存了中断返回时恢复的执行上下文, 都是用户态的.
 
-    - 启动内核线程过程中堆栈的使用情况
-        '''
-        位置			             堆栈
-        do_fork系统调用会设置proc的返回地址是fork_ret, do_fork系统调用返回
-        switch_to_1		         idle's kernel stack, 这个栈会被保存在from中
-        switch_to_2		         to.esp	= proc.tf
-        forkret			           to.esp	= proc.tf
-        forkrets		           proc.tf = proc.kstack + KSTACKSIZE - sizeof(struct trapframe)
-        \_\_trapret		         proc.tf 		0 (中断返回)
-        kernel\_thread\_entry	 proc.tf + xx 这里开始tf不维护了, 给内核线程当做线程栈使用, 由于kstack是用alloc_page分配的,不是和proc_struct保存在一起的, 所以不维护这个栈不会导致其他数据被破坏
-        '''
-    - 启动用户线程过程中堆栈使用情况
-        位置                    堆栈
-        fork, sys_fork          caller's kernel stack(idle或者其他线程的内核栈)
-        proc_run                设置了进程的内核栈(proc.kstack+KSTACKSIZE), 放在tss中, 用于用户态进程转到内核中时使用
-        syscall(execv)          ..
-        do_execve
-        load_icode              tf中设置用户堆栈USTACKTOP(0xC0000000)
-        iret                    切换到上面设置的用户栈
-        \_start                 用户栈
-        syscall                 切换到tss中指定的内核栈()
+1. 进程内核堆栈和用户态堆栈如何分配和使用?
+  - 启动内核线程过程中堆栈的使用情况
+      '''
+      位置			             堆栈
+      do_fork系统调用会设置proc的返回地址是fork_ret, do_fork系统调用返回
+      switch_to_1		         idle's kernel stack, 这个栈会被保存在from中
+      switch_to_2		         to.esp	= proc.tf
+      forkret			           to.esp	= proc.tf
+      forkrets		           proc.tf = proc.kstack + KSTACKSIZE - sizeof(struct trapframe)
+      \_\_trapret		         proc.tf 		0 (中断返回)
+      kernel\_thread\_entry	 proc.tf + xx 这里开始tf不维护了, 给内核线程当做线程栈使用, 由于kstack是用alloc_page分配的,不是和proc_struct保存在一起的, 所以不维护这个栈不会导致其他数据被破坏
+      '''
+  - 启动用户线程过程中堆栈使用情况
+      位置                    堆栈
+      fork, sys_fork          caller's kernel stack(idle或者其他线程的内核栈)
+      proc_run                设置了进程的内核栈(proc.kstack+KSTACKSIZE), 放在tss中, 用于用户态进程转到内核中时使用
+      syscall(execv)          ..
+      do_execve
+      load_icode              tf中设置用户堆栈USTACKTOP(0xC0000000)
+      iret                    切换到上面设置的用户栈
+      \_start                 用户栈
+      syscall                 切换到tss中指定的内核栈()
+
+1. 系统调用过程中是否可以发生中断, 中断重入如何实现?
+  - trap.c::trap(tf)中备份了当前进程的tf, 然后调用trap_dispatch(tf)处理中断, 处理中断过程中一直是关中断的, 代码bug可能导致异常, 这时发生中断重入, 这个中断重入在内核中是在相同进程中进行的, 也不会切换堆栈, current不会改变, 新的中断运行到trap(tf)也会备份当前tf. 中断返回的时候就返回到上一个trap(tf)中, trap(tf)会恢复当前层的tf, 这样实现了中断重入. 注意, 这里中断重入之后也是可以切换进程的, 因为各级tf都保存在当前进程的内核栈中.
+
+### 思考题
+1. copy on write
+  - struct Page中添加一个链表, 链表元素是所有引用了当前物理页的(页表,虚拟地址,COW)三元组, 当COW为true, 说明该虚拟页采用copy on write机制.
+  - copy_range函数添加一个标志, 是否使用copy_on_write, 如果使用, 则copy_range只复制页表项, 并且每个页表项P位设置为1, 可写属性设置为0.
+  - 当有任何一个进程写该虚拟页是, 产生一个页面错误, 在do_pgfault中查找产生页面错误的虚拟地址对应的物理地址对应的Page结构体中的链表, 遍历链表中所有(页表,虚拟地址,COW)三元组, 如果当前访问的虚拟地址在这个链表的某一项表示的范围中, 则复制该物理页, 使该物理页有n份, 给每个虚拟页W为重新设置为1, 从该链表中删除这些COW为true的三元组
+2. 进程生命周期
+  - 其他进程调用do_fork创建proc_struct (PROC_UNINIT)
+  - 其他进程wakeup_proc(proc), (PROC_RUNNABLE, current != proc)
+  - 其他进程schedule(), 如果选中了该进程, proc_run(proc) (current = proc)
+  - 如果是内核线程, 该进程调用yield()等系统调用 (PROC_RUNNABLE, current != proc)
+  - 如果是用户进程, 该进程因为任何原因进入内核(异常中断系统调用), 会调用schedule(), 如果此时存在其他进程 (PROC_RUNNABLE, current != proc)
+  - 该进程调用exit(pid), PROC_ZOMBIE
+  - 该进程调用sleep(), wait(), PROC_SLEEPING
+  - 该进程等待的进程进入了PROC_ZOMBIE状态, 当前进程PROC_RUNNABLE, 目标进程proc_struct被释放
+
+## 实验六: 进程调度
+1. sched文件夹下各文件分析
+2. stride scheduling的实现
+3. 多级反馈队列调度算法
+
+## 实验七: 同步互斥
+1. semaphore的实现
+2. semaphore解决哲学家问题的分析
+3. monitor的实现
+4. 思考题:
+  - 用户态进程/线程提供信号量机制的设计方案，并比较说明给内核级提供信号量机制的异同。
+  - 能否不用基于信号量机制来完成条件变量？如果不能，请给出理由，如果能，请给出设计说明和具体实现。

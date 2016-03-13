@@ -484,3 +484,28 @@ IDT每个表项是一个门描述符, 占8字节. 0-15位是段内偏移低16位
 4. 思考题:
   - 用户态进程/线程提供信号量机制的设计方案，并比较说明给内核级提供信号量机制的异同。
   - 能否不用基于信号量机制来完成条件变量？如果不能，请给出理由，如果能，请给出设计说明和具体实现。
+
+## 实验八: 文件系统
+### 函数
+1. sfs_rbuf(sfs, buf, len, blkno, offset)
+  - 将sfs的blkno的块号上从offset偏移量开始长为len的数据读入buf, 数据的长度不能超出blkno这个block
+2. sfs_bmap_load_nolock(sfs, sin, index, ino_store)
+  - 根据index(表示在inode中的第index个block)获取该block的block号
+
+### 思考题
+1. ”UNIX的PIPE机制“的概要设方案
+  - 现在stdio是通过系统调用putc来实现cprintf的, 首先应该改为用read/write这些系统调用来实现, 并且给stdin/stdout/stderr分配特殊的file descriptor, 比如0/1/2
+  - 在struct file中保存一个buffer, 对于这些特殊的fd, 这个buffer用于pipe
+  - 在系统调用read/write中检查fd是否是这些特殊的值, 如果是, 则向buffer中读/写
+  - 在fd_array_init, 分配fd时要避开这些值
+  - 提供系统调用flush, 刷新文件的缓冲区. 对于磁盘文件, 是写入磁盘, 对于虚拟文件, 是将buffer中的内容写到屏幕. 对于stdin则是通过中断机制, 将键盘缓冲区中的字符复制到stdin对应的struct file中的buffer中.
+  - 最后, 提供系统调用pipe, 将两个进程的stdio和stdout/stderr连接起来, 具体实现时pipe中用内存映射将两者的buffer映射到同一片物理内存.
+2. ”UNIX的硬链接和软链接机制“的概要设方案
+  - 硬链接
+    - 创建(虽然现在只能把文件写死在磁盘镜像上, 不能动态创建): 创建文件时不给文件分配inode号, 而是把目标文件的inode号赋给该文件, 把inode里的引用计数+1,
+    - 打开: 和普通文件没区别
+    - 删除: inode号-1, 如果为0, 删除inode
+  - 软连接
+    - 创建: 普通文件, 文件属性标示自己是一个软连接, 并在文件内部保存目标文件的路径字符串
+    - 打开:sys_open的时候检查文件属性, 如果是软连接则打开文件中字符串制定的文件
+    - 删除: 和普通文件没区别
